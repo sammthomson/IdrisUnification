@@ -38,9 +38,12 @@ Show (Term n d) where
   showPrec d (FuncApp (MkName _ name) args) =
     showCon d "FuncApp" (showArg name ++ showArg args)
 
+Show (Subst m d) where
+  showPrec d (MkSubst x t) = showCon d "Subst" ((showArg x) ++ (showArg t))
+
 Show (SubstList m n) where
   show Nil = "[]"
-  show (s :: ss) = show s ++ " :: " ++ show ss
+  show (s :: ss) = (show s) ++ " :: " ++ (show ss)
 
 
 

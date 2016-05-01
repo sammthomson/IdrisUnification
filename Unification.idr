@@ -31,15 +31,21 @@ relaxD : Term n d -> Term n (d + diff)
 relaxD (Var i) = Var i
 relaxD (FuncApp f args) = FuncApp f (map relaxD args)
 
+||| A substitution of a `Term n d` for a variable `Fin (n+1)`
+||| @ n the number of vars after applying the substitution.
+||| @ d the depth of the term to be substituted
+data Subst : (n : Nat) -> (d : Nat) -> Type where
+  MkSubst : (i : Fin (S n)) -> (t : Term n d) -> Subst n d
+
 ||| A list of substitutions, of the form
-||| `(Term m d, Fin (m+1)), (Term m-1 d, Fin m), (Term m-2 d, Fin m-1), ...`
-||| Each `tx` in a Subst reduces the number of variables by one, so
+||| `[Subst m d, Subst m-1 d, Subst m-2 d, ...]`
+||| Each `s` in a SubstList reduces the number of variables by one, so
 ||| successive substitutions operate on the reduced set of var idxs.
 ||| @ m the number of vars before applying the substitutions.
-||| @ n the number of vars after applying the substitutions.
+||| @ n the number of vars remaining after applying the substitutions.
 data SubstList : (m : Nat) -> (n : Nat) -> Type where
   Nil : {n : Nat} -> SubstList n n  -- no op
-  (::) : (subst : (Term m d, Fin (S m))) ->
+  (::) : (s : Subst m d) ->
          (tail : SubstList m n)
            -> SubstList (S m) n
 
@@ -55,40 +61,35 @@ thin (FS x) (FS y) = FS (thin x y)
 ||| y |-> Just y,        if y < x,
 |||       Nothing,       if y = x,
 |||       Just (pred y), if y > x
-thick : (x : Fin (S n)) -> (y : Fin (S n)) -> Maybe (Fin n)
+thick : (x, y : Fin (S n)) -> Maybe (Fin n)
 thick {n=S k} FZ     (FS y) = Just y
 thick {n=S k} x      FZ     = Just FZ
 thick {n=S k} (FS x) (FS y) = FS <$> thick x y
 thick         _      _      = Nothing
 
 ||| replaces any occurrance of a `Var i` in `t` with `f i`
-||| @ f a function from variable idx to a term to replace it with
+--||| @ f a function from variable idx to a term to replace it with
 ||| @ t the term to search and replace in
-replaceVar : (f : Fin n -> Term m d1) ->
-             (t : Term n d2)
-               -> Term m (d1 + d2)
-replaceVar f (Var i) = relaxD (f i)  -- replace Var i with f i
-replaceVar {d1=d1} f (FuncApp {d=d2} s ts) =
-  retype (FuncApp s (map (replaceVar f) ts)) where
+subst : Subst m d1 ->
+            (t : Term (S m) d2)
+              -> Term m (d1 + d2)
+subst (MkSubst x t) (Var i) = relaxD (maybe t Var (thick x i))
+subst {d1=d1} s (FuncApp {d=d2} f args) =
+  retype (FuncApp f (map (subst s) args)) where
     retype = replace (plusSuccRightSucc d1 d2)  -- convince idris this has the right type
 
 
 ||| Given an idx `y` of a Var, `t \`for\` x` substitutes `t` for `x`,
 ||| (where `t` is a term not mentioning `x`), thereby
 ||| reducing the number of vars (`n`).
-for : (t : Term n d) ->
-        (x : Fin (S n)) ->
-        (y : Fin (S n))
-          -> Term n d
-for t x y = case thick x y of
-  Nothing => t
-  Just y' => Var y'
+-- for : (Subst n d) -> (y : Fin (S n)) -> Term n d
+-- for (MkSubst x t) y = maybe t Var (thick x y)
 
 -- compose : (f : Fin m -> Term n d2) ->
 --           (g : Fin l -> Term m d1) ->
 --           Fin l
 --             -> Term n (d2 + d1)
--- compose f g = replaceVar f . g
+-- compose f g = subst f . g
 
 -- ||| apply a substitution
 -- apply : {d, m, n : Nat} -> SubstList m n -> Fin m -> Term n (d1 + d2)
@@ -114,13 +115,13 @@ flexRigid : Fin n -> Term n d -> Maybe (Exists (SubstList n))
 flexRigid {n=Z} _ _ = Nothing
 flexRigid {n=S k} x t = case check x t of
   Nothing => Nothing
-  Just t' => Just (Evidence k [(t', x)])
+  Just t' => Just (Evidence k [MkSubst x t'])
 
 flexFlex : (x, y : Fin n) -> Exists (SubstList n)
 flexFlex {n=Z} _ _ = Evidence Z []  -- impossible
 flexFlex {n=S k} x y = case thick x y of
   Nothing => Evidence (S k) ([] {n=S k})
-  Just y' => Evidence k [(Var y' {d=0}, x)]
+  Just y' => Evidence k [MkSubst x (Var y' {d=0})]
 
 
 
@@ -188,10 +189,10 @@ unify' (FuncApp {k=k1} s1 ts1) (FuncApp {k=k2} s2 ts2) acc =
 unify' (Var x1) (Var x2) (Evidence n []) = Just (flexFlex x1 x2)
 unify' (Var x1) t2       (Evidence n []) = flexRigid x1 t2
 unify' t1       (Var x2) (Evidence n []) = flexRigid x2 t1
-unify' t1 t2 (Evidence n ((t, x) :: s)) =
-  case unify' (replaceVar (t `for` x) t1) (replaceVar (t `for` x) t2) (Evidence n s) of
+unify' t1 t2 (Evidence n (s :: ss)) =
+  case unify' (subst s t1) (subst s t2) (Evidence n ss) of
     Nothing => Nothing
-    Just (Evidence n sl) => Just (Evidence n ((t, x) :: sl))
+    Just (Evidence n sl) => Just (Evidence n (s :: sl))
 
 unify : (t1 : Term m d1) -> (t2 : Term m d2) -> Maybe (Exists (SubstList m))
 unify {m=m} t1 t2 = unify' t1 t2 (Evidence m [])
