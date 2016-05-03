@@ -11,7 +11,7 @@ c : Term (Fin 2)
 c = identifier (MkName "c")
 
 cc : Term (Fin 2)
-cc = fork c c
+cc = app c c
 
 x : Term (Fin 2)
 x = var 0
@@ -23,7 +23,7 @@ unifyXY : Maybe (Exists (SubstList 2))
 unifyXY = unify x y
 
 unifyXFCC : Maybe (Exists (SubstList 2))
-unifyXFCC = unify x (fork f cc)
+unifyXFCC = unify x (app f cc)
 
 toNatPair : Fin n -> (Nat, Nat)
 toNatPair (FZ {k=k}) = (1, S k)
@@ -37,7 +37,7 @@ Show n => Show (Term n) where
   showPrec d = fold
     (\i => showCon d "Var" (showArg i))
     (\c => case c of (MkName n) => showCon d "Identifier" (showArg n))
-    (\l, r => showCon d "Fork" (" " ++ l ++ " " ++ r))
+    (\l, r => showCon d "App" (" " ++ l ++ " " ++ r))
 
 Show (Subst m) where
   showPrec d (MkSubst x t) = showCon d "Subst" ((showArg x) ++ (showArg t))
@@ -52,5 +52,5 @@ Show (Exists (SubstList n)) where
 main : IO ()
 main = do
   printLn unifyXY
-  printLn $ unify (fork f (fork f c)) (fork f y)
+  printLn $ unify (app f (app f c)) (app f y)
   printLn unifyXFCC
