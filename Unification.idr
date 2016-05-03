@@ -156,29 +156,29 @@ flexRigid {n=S n'} x t = map (\t' => Evidence n' [MkSubst x t']) (check x t)
 ||| we can always unify two variables
 flexFlex : (x, y : Fin n) -> Exists (SubstList n)
 flexFlex {n=Z} _ _ = Evidence Z []  -- impossible, Fin Z is uninhabited
-flexFlex {n=S k} x y = case thick x y of
-  Nothing => Evidence (S k) []                -- x = y, no subst needed
-  Just y' => Evidence k [MkSubst x (Var y')]  -- x != y, sub y' for x
+flexFlex {n=S n'} x y = case thick x y of
+  Nothing => Evidence (S n') []                -- x = y, no subst needed
+  Just y' => Evidence n' [MkSubst x (Var y')]  -- x != y, sub y' for x
 
 ||| helper function for unify
 unify' : (t1 : TermD (Fin m) d1) ->
          (t2 : TermD (Fin m) d2) ->
          (acc : Exists (SubstList m))
            -> Maybe (Exists (SubstList m))
-unify' (App la ra) (App lb rb) acc =
-  Just acc >>= unify' la lb >>= unify' ra rb
-unify' (Var x1) (Var x2) (Evidence n []) = Just (flexFlex x1 x2)
-unify' (Var x1) t2       (Evidence n []) = flexRigid x1 t2
-unify' t1       (Var x2) (Evidence n []) = flexRigid x2 t1
+unify' t1 t2 (Evidence n (s :: tail)) =  -- non-empty `acc`
+  map consS $ unify' (subst s t1) (subst s t2) (Evidence n tail) where
+    consS (Evidence n' sl) = Evidence n' (s :: sl)
+unify' (Var x1) (Var x2) _ = Just (flexFlex x1 x2)
+unify' (Var x1) t2       _ = flexRigid x1 t2
+unify' t1       (Var x2) _ = flexRigid x2 t1
 unify' {m=m} (Identifier c1) (Identifier c2) acc =
   if c1 == c2 then Just acc else Nothing
-unify' _ _ (Evidence n []) = Nothing
-unify' t1 t2 (Evidence n (s :: ss)) =
-  case unify' (subst s t1) (subst s t2) (Evidence n ss) of
-    Nothing => Nothing
-    Just (Evidence n sl) => Just (Evidence n (s :: sl))
+unify' (App la ra) (App lb rb) acc =
+  Just acc >>= unify' la lb >>= unify' ra rb
+unify' _ _ _ = Nothing  -- can't unify identifier with function application
+                        -- (in first-order unification, anyway)
 
-||| Finds the most general substitution of terms for variables that makes
+||| Finds the most general substitutions of terms for variables that makes
 ||| the two terms equal.
 unify : (t1 : Term (Fin m)) -> (t2 : Term (Fin m)) -> Maybe (Exists (SubstList m))
 unify {m=m} t1 t2 = unify' t1 t2 (Evidence m [])
