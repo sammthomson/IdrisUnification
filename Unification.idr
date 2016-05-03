@@ -52,7 +52,7 @@ namespace Term
   fork : Term v -> Term v -> Term v
   fork left right = Fork left right
 
-  ||| we unpack and use `d` to convince idris fold' is well-founded
+  ||| we unpack and use `d` to convince idris `fold'` is well-founded
   fold : (v -> r) -> (Name -> r) -> (r -> r -> r) -> Term v -> r
   fold v n f (MkTerm (Evidence d t)) = fold' v n f d t where
     fold' v n f d t = case t of
@@ -79,11 +79,12 @@ Traversable Term where
     (\c => pure (identifier c))
     (\l, r => [| fork l r |])
 
-||| A substitution of a `Term n d` for a variable `Fin (n+1)`
+||| A substitution of a `Term (Fin n)` for a variable `Fin (S n)`
 ||| @ n the number of vars after applying the substitution.
-||| `x` is the variable to replace
-||| `t` is the term (not mentioning `x`) to replace `x` with
 data Subst : (n : Nat) -> Type where
+  ||| Make a Subst
+  ||| @ x is the variable to replace
+  ||| @ t is the term (not mentioning `x`) to replace `x` with
   MkSubst : (x : Fin (S n)) -> (t : Term (Fin n)) -> Subst n
 
 
@@ -100,10 +101,10 @@ thin (FS x) (FS y) = FS (thin x y)
 |||       Nothing,       if y = x,
 |||       Just (pred y), if y > x
 thick : (x, y : Fin (S n)) -> Maybe (Fin n)
-thick {n=S k} FZ     (FS y) = Just y
-thick {n=S k} x      FZ     = Just FZ
-thick {n=S k} (FS x) (FS y) = FS <$> thick x y
-thick         _      _      = Nothing
+thick {n=S k} FZ     (FS y) = Just y              -- y < x
+thick {n=S k} (FS x) FZ     = Just FZ             -- y > x
+thick {n=S k} (FS x) (FS y) = FS <$> thick x y    -- recurse
+thick         _      _      = Nothing             -- y = x
 
 ||| replaces any occurrance of a `Var y` in `t` with `r` if
 ||| `x == y` or `Var (thick x y)` otherwise.
