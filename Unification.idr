@@ -8,46 +8,84 @@ import Data.Vect
 %default total
 %access public export
 
-||| An identifier for an arity-k function
-data Name : (k : Nat) -> Type where
-  MkName : (k : Nat) -> (name : String) -> Name k
+||| An identifier
+data Name = MkName String
 
+Eq Name where
+  (MkName x) == (MkName y) = x == y
 
 ||| A term in the language.
-||| Either a variable, or an arity-k function applied to k argument terms.
-||| @ n an upper bound on the number of variables in the term
-||| @ d an upper bound on the depth of the syntax tree (starting at 0)
-data Term : (n : Nat) -> (d : Nat) -> Type where
+||| Either a variable, an identifier, or a function applied to an argument.
+||| @ v the type `Var`s are indexed by
+||| @ d the depth of the AST
+data TermD : (v : Type) -> (d : Nat) -> Type where
   ||| A variable with index i
   ||| @ i the index
-  Var : {d : Nat} -> (i : Fin n) -> Term n d  -- d >= 0, n >= 1
-  ||| An arity-k function applied to k arguments
-  ||| Increases d by 1
-  FuncApp : (func : Name k) -> (args : Vect k (Term n d)) -> Term n (S d)
+  Var : (i : v) -> TermD v Z
+  Identifier : Name -> TermD v Z
+  ||| untyped function application
+  Fork : TermD v d1 -> TermD v d2 -> TermD v (S (max d1 d2))
 
-||| Relaxes the upper bound on depth, `d`
-implicit
-relaxD : Term n d -> Term n (d + diff)
-relaxD (Var i) = Var i
-relaxD (FuncApp f args) = FuncApp f (map relaxD args)
+||| A TermD with `d` as a reified witness instead of a type param
+data Term : (v : Type) -> Type where
+  MkTerm : Exists (TermD v) -> Term v
+
+namespace Term
+  depth : Term v -> Nat
+  depth (MkTerm t) = getWitness t
+
+  implicit
+  toTermD : (t : Term v) -> TermD v (depth t)
+  toTermD (MkTerm t) = getProof t
+
+  implicit
+  fromTermD : TermD v d -> Term v
+  fromTermD {d=d} t = MkTerm (Evidence d t)
+
+  {- constructors for Term (making use of implicit conversions to/from TermD) -}
+  var : v -> Term v
+  var v = Var v
+
+  identifier : {v : Type} -> Name -> Term v
+  identifier c = Identifier c
+
+  fork : Term v -> Term v -> Term v
+  fork left right = Fork left right
+
+  ||| we unpack and use `d` to convince idris fold' is well-founded
+  fold : (v -> r) -> (Name -> r) -> (r -> r -> r) -> Term v -> r
+  fold v n f (MkTerm (Evidence d t)) = fold' v n f d t where
+    fold' v n f d t = case t of
+      Var i => v i
+      Identifier c => n c
+      Fork {d1=d1} {d2=d2} l r => f (fold' v n f d1 l) (fold' v n f d2 r)
+
+Functor Term where
+  map f t = fold (var . f) identifier fork t
+
+Applicative Term where
+  pure = var
+  mf <*> ma = fold (\f => map f ma) identifier fork mf
+
+Monad Term where
+  t >>= f = fold f identifier fork t
+
+Foldable Term where
+  foldr op z t = fold op (const id) (.) t z
+
+Traversable Term where
+  traverse f = fold
+    (\y => [| var (f y) |])
+    (\c => pure (identifier c))
+    (\l, r => [| fork l r |])
 
 ||| A substitution of a `Term n d` for a variable `Fin (n+1)`
 ||| @ n the number of vars after applying the substitution.
-||| @ d the depth of the term to be substituted
-data Subst : (n : Nat) -> (d : Nat) -> Type where
-  MkSubst : (i : Fin (S n)) -> (t : Term n d) -> Subst n d
+||| `x` is the variable to replace
+||| `t` is the term (not mentioning `x`) to replace `x` with
+data Subst : (n : Nat) -> Type where
+  MkSubst : (x : Fin (S n)) -> (t : Term (Fin n)) -> Subst n
 
-||| A list of substitutions, of the form
-||| `[Subst m d, Subst m-1 d, Subst m-2 d, ...]`
-||| Each `s` in a SubstList reduces the number of variables by one, so
-||| successive substitutions operate on the reduced set of var idxs.
-||| @ m the number of vars before applying the substitutions.
-||| @ n the number of vars remaining after applying the substitutions.
-data SubstList : (m : Nat) -> (n : Nat) -> Type where
-  Nil : {n : Nat} -> SubstList n n  -- no op
-  (::) : (s : Subst m d) ->
-         (tail : SubstList m n)
-           -> SubstList (S m) n
 
 ||| `thin x` maps each `Fin n` to a unique `Fin (S n)` that is not `x`.
 ||| y |-> FS y, if y >= x,
@@ -67,132 +105,63 @@ thick {n=S k} x      FZ     = Just FZ
 thick {n=S k} (FS x) (FS y) = FS <$> thick x y
 thick         _      _      = Nothing
 
-||| replaces any occurrance of a `Var i` in `t` with `f i`
---||| @ f a function from variable idx to a term to replace it with
+||| replaces any occurrance of a `Var y` in `t` with `r` if
+||| `x == y` or `Var (thick x y)` otherwise.
+||| @ s the substitution to make
 ||| @ t the term to search and replace in
-subst : Subst m d1 ->
-            (t : Term (S m) d2)
-              -> Term m (d1 + d2)
-subst (MkSubst x t) (Var i) = relaxD (maybe t Var (thick x i))
-subst {d1=d1} s (FuncApp {d=d2} f args) =
-  retype (FuncApp f (map (subst s) args)) where
-    retype = replace (plusSuccRightSucc d1 d2)  -- convince idris this has the right type
+subst : (s : Subst m) -> (t : Term (Fin (S m))) -> Term (Fin m)
+subst (MkSubst x r) t = map (thick x) t >>= (maybe r var)
 
-
-||| Given an idx `y` of a Var, `t \`for\` x` substitutes `t` for `x`,
-||| (where `t` is a term not mentioning `x`), thereby
-||| reducing the number of vars (`n`).
--- for : (Subst n d) -> (y : Fin (S n)) -> Term n d
--- for (MkSubst x t) y = maybe t Var (thick x y)
-
--- compose : (f : Fin m -> Term n d2) ->
---           (g : Fin l -> Term m d1) ->
---           Fin l
---             -> Term n (d2 + d1)
--- compose f g = subst f . g
-
--- ||| apply a substitution
--- apply : {d, m, n : Nat} -> SubstList m n -> Fin m -> Term n (d1 + d2)
--- apply Nil i = Var i
--- apply ((t, x) :: s) y = (apply s) `compose` (t `for` x) y
-
-
--- ||| composes two substitution lists
--- (++) : SubstList m n -> SubstList l m -> SubstList l n
--- xs ++ [] = xs
--- xs ++ (y :: ys) = y :: (xs ++ ys)
-
+||| A list of substitutions, of the form
+||| `[Subst m d, Subst m-1 d, Subst m-2 d, ...]`
+||| Each `s` in a SubstList reduces the number of variables by one, so
+||| successive substitutions operate on the reduced set of var idxs.
+||| @ m the number of vars before applying the substitutions.
+||| @ n the number of vars remaining after applying the substitutions.
+data SubstList : (m : Nat) -> (n : Nat) -> Type where
+  Nil : {n : Nat} -> SubstList n n  -- no op
+  (::) : (s : Subst m) ->
+         (tail : SubstList m n)
+           -> SubstList (S m) n
 
 ||| Check that `x` doesn't appear in `t`.
 ||| If it does, return Nothing.
-||| If it doesn't, return `t` but with a tighter upper bound `n`.
-check : (x : Fin (S n)) -> (t : Term (S n) d) -> Maybe (Term n d)
-check x (Var y)   = Var <$> thick x y
-check x (FuncApp s ts) = FuncApp s <$> traverse (check x) ts
+||| If it doesn't, return `t` but over a smaller set of vars.
+check : (x : Fin (S n)) -> (t : Term (Fin (S n))) -> Maybe (Term (Fin n))
+check x = traverse (thick x)
 
+||| As long as the var x doesn't appear in t, we can unify x and t
+||| by substituting t for x.
+flexRigid : Fin n -> Term (Fin n) -> Maybe (Exists (SubstList n))
+flexRigid {n=Z} _ _ = Nothing  -- impossible
+flexRigid {n=S n'} x t = map (\t' => Evidence n' [MkSubst x t']) (check x t)
 
-flexRigid : Fin n -> Term n d -> Maybe (Exists (SubstList n))
-flexRigid {n=Z} _ _ = Nothing
-flexRigid {n=S k} x t = case check x t of
-  Nothing => Nothing
-  Just t' => Just (Evidence k [MkSubst x t'])
-
+||| we can always unify two variables
 flexFlex : (x, y : Fin n) -> Exists (SubstList n)
 flexFlex {n=Z} _ _ = Evidence Z []  -- impossible
 flexFlex {n=S k} x y = case thick x y of
-  Nothing => Evidence (S k) ([] {n=S k})
-  Just y' => Evidence k [MkSubst x (Var y' {d=0})]
+  Nothing => Evidence (S k) ([] {n=S k})  -- x = y, no subst needed
+  Just y' => Evidence k [MkSubst x (Var y')]  -- x != y
 
-
-
-mkNameInjective : {k : Nat} -> {x : String} -> {y : String}
-                    -> (MkName k x = MkName k y) -> (x = y)
-mkNameInjective Refl = Refl
-
-DecEq (Name k) where
-  decEq (MkName _ x) (MkName _ y) = case decEq x y of
-    Yes pf => Yes (cong pf)
-    No pf  => No (pf . mkNameInjective)
-
-varInjective : {k : Nat} -> {x : Fin n} -> {y : Fin n}
-                    -> (Var x = Var y) -> (x = y)
-varInjective Refl = Refl
-
-funcAppInjective : {k1 : Nat} -> {s1 : Name k1} -> {ts1 : Vect k1 (Term n d)} ->
-               {k2 : Nat} -> {s2 : Name k2} -> {ts2 : Vect k2 (Term n d)} ->
-               (FuncApp s1 ts1 = FuncApp s2 ts2)
-                 -> (k1 = k2, s1 = s2, ts1 = ts2)
-funcAppInjective Refl = (Refl, Refl, Refl)
-
-varNotFuncApp : {x : Fin n} -> {s : Name k} -> {ts : Vect k (Term n d)} -> Var x = FuncApp s ts -> Void
-varNotFuncApp Refl impossible
-
-DecEq (Term n _) where
-  decEq (Var x1) (Var x2) = case decEq x1 x2 of
-    No pf => No (pf . (varInjective {k=n}))
-    Yes Refl => Yes Refl
-  decEq (FuncApp {k=k1} s1 ts1) (FuncApp {k=k2} s2 ts2) = case decEq k1 k2 of
-    No pf => No (pf . fst . funcAppInjective)
-    Yes Refl =>
-      case decEq s1 s2 of
-        No pf => No (pf . Prelude.Basics.fst . snd . funcAppInjective)
-        Yes Refl => case decEq ts1 ts2 of
-          No pf => No (pf . snd . snd . funcAppInjective)
-          Yes Refl => Yes Refl
-  decEq (Var _) (FuncApp s ts) = No varNotFuncApp
-  decEq (FuncApp s ts) (Var x) = No (negEqSym varNotFuncApp)
-
-
--- maxNatBy : (f : a -> Nat) -> Vect k a -> Nat
--- maxNatBy _ [] = Z
--- maxNatBy f (x :: xs) = max (f x) (maxNatBy f xs)
-
--- depth : Term n d -> Nat
--- depth (Var i) = Z
--- depth (FuncApp s ts) = S (maxNatBy depth ts)
-
--- depthLteqD : (t : Term n d) -> LTE (depth t) d
--- depthLteqD (Var {d=d} i) = LTEZero {right=d}
--- depthLteqD (FuncApp {d=d} f args) = LTEZero {right=d}
-
-
-unify' : (t1 : Term m d1) ->
-         (t2 : Term m d2) ->
+||| helper function for unify
+unify' : (t1 : TermD (Fin m) d1) ->
+         (t2 : TermD (Fin m) d2) ->
          Exists (SubstList m)
            -> Maybe (Exists (SubstList m))
-unify' (FuncApp {k=k1} s1 ts1) (FuncApp {k=k2} s2 ts2) acc =
-  case decEq k1 k2 of
-    No _ => Nothing
-    Yes Refl => case decEq s1 s2 of
-      No _ => Nothing
-      Yes Refl => foldl (>>=) (Just acc) (zipWith unify' ts1 ts2)
+unify' (Fork la ra) (Fork lb rb) acc =
+  Just acc >>= unify' la lb >>= unify' ra rb
 unify' (Var x1) (Var x2) (Evidence n []) = Just (flexFlex x1 x2)
 unify' (Var x1) t2       (Evidence n []) = flexRigid x1 t2
 unify' t1       (Var x2) (Evidence n []) = flexRigid x2 t1
+unify' {m=m} (Identifier c1) (Identifier c2) acc =
+  if c1 == c2 then Just acc else Nothing
+unify' _ _ (Evidence n []) = Nothing
 unify' t1 t2 (Evidence n (s :: ss)) =
   case unify' (subst s t1) (subst s t2) (Evidence n ss) of
     Nothing => Nothing
     Just (Evidence n sl) => Just (Evidence n (s :: sl))
 
-unify : (t1 : Term m d1) -> (t2 : Term m d2) -> Maybe (Exists (SubstList m))
+||| Finds the most general assignment of terms to variables that makes
+||| the two terms equal.
+unify : (t1 : Term (Fin m)) -> (t2 : Term (Fin m)) -> Maybe (Exists (SubstList m))
 unify {m=m} t1 t2 = unify' t1 t2 (Evidence m [])

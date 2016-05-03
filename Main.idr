@@ -4,26 +4,26 @@ import Data.Vect
 import Data.Fin
 import Unification
 
-f : Name 1
-f = MkName 1 "f"
+f : Term (Fin 2)
+f = identifier (MkName "f")
 
-r : Name 2
-r = MkName 2 "r"
+c : Term (Fin 2)
+c = identifier (MkName "c")
 
-c : Term 2 1
-c = FuncApp (MkName 0 "c") []
+cc : Term (Fin 2)
+cc = fork c c
 
-x : Term 2 0
-x = Var 0
+x : Term (Fin 2)
+x = var 0
 
-y : Term 2 0
-y = Var 1
+y : Term (Fin 2)
+y = var 1
 
 unifyXY : Maybe (Exists (SubstList 2))
 unifyXY = unify x y
 
-unifyXFC : Maybe (Exists (SubstList 2))
-unifyXFC = unify x (FuncApp f [c])
+unifyXFCC : Maybe (Exists (SubstList 2))
+unifyXFCC = unify x (fork f cc)
 
 toNatPair : Fin n -> (Nat, Nat)
 toNatPair (FZ {k=k}) = (1, S k)
@@ -33,21 +33,24 @@ Show (Fin n) where
   showPrec d i = case toNatPair i of
     (i, n) => showCon d "Fin" (" " ++ show i ++ "/" ++ show n)
 
-Show (Term n d) where
-  showPrec d (Var i) = showCon d "Var" (showArg i)
-  showPrec d (FuncApp (MkName _ name) args) =
-    showCon d "FuncApp" (showArg name ++ showArg args)
+Show n => Show (Term n) where
+  showPrec d = fold
+    (\i => showCon d "Var" (showArg i))
+    (\c => case c of (MkName n) => showCon d "Identifier" (showArg n))
+    (\l, r => showCon d "Fork" (" " ++ l ++ " " ++ r))
 
-Show (Subst m d) where
+Show (Subst m) where
   showPrec d (MkSubst x t) = showCon d "Subst" ((showArg x) ++ (showArg t))
 
 Show (SubstList m n) where
   show Nil = "[]"
   show (s :: ss) = (show s) ++ " :: " ++ (show ss)
 
+Show (Exists (SubstList n)) where
+  show (Evidence _ ss) = show ss
 
-
---main : IO ()
---main = do
---  printLn (map getProof unifXY)
---  printLn $ map getProof $ unify (FuncApp f [FuncApp f [c]]) (FuncApp f [x])
+main : IO ()
+main = do
+  printLn unifyXY
+  printLn $ unify (fork f (fork f c)) (fork f y)
+  printLn unifyXFCC
